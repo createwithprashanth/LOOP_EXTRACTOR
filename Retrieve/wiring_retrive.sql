@@ -99,10 +99,10 @@ CABLE_CORE_DATA AS (
         AND c.CABLE_NUM <> 'JUMPERS'
         AND (
             :unit_name_like IS NULL
-            OR pu_cmp.UNIT_NAME LIKE :unit_name_like
+            OR REGEXP_LIKE(pu_cmp.UNIT_NAME, :unit_name_like)
             OR (
                 (c.DEF_FLG = 'C' OR c.CABLE_NUM = 'CROSS WIRE')
-                AND (pu_from.UNIT_NAME LIKE :unit_name_like OR pu_to.UNIT_NAME LIKE :unit_name_like)
+                AND (REGEXP_LIKE(pu_from.UNIT_NAME, :unit_name_like) OR REGEXP_LIKE(pu_to.UNIT_NAME, :unit_name_like))
             )
         )
         AND (
@@ -110,6 +110,20 @@ CABLE_CORE_DATA AS (
             OR c.CABLE_NUM = 'CROSS WIRE'
             OR (TRIM(wg.GROUP_NAME) IS NOT NULL AND TRIM(wg.GROUP_NAME) <> '****')
         )
+)
+,
+APPARATUS_CHILD_PICK AS (
+    /* For each parent apparatus (e.g. BAI1), resolve the best child/module apparatus (e.g. BAI1-1).
+       Grouped by PARENT_ID only (not panel) because child apparatus rows often have NULL PANEL_ID. */
+    SELECT
+        a.PARENT_ID,
+        MAX(a.APPAR_NAME) KEEP (
+            DENSE_RANK FIRST
+            ORDER BY NVL(a.APPAR_SEQ, 999999), a.APPAR_ID
+        ) AS APPAR_CHILD_NAME
+    FROM APPARATUS a
+    WHERE NULLIF(a.PARENT_ID, 0) IS NOT NULL
+    GROUP BY a.PARENT_ID
 )
 ,
 IO_ASSIGN AS (
@@ -122,6 +136,7 @@ IO_ASSIGN AS (
         cst.CHANNEL_ID,
         ch.CHANNEL_NAME,
         COALESCE(ap_id.APPAR_NAME, ap_strip.APPAR_NAME) AS APPAR_NAME,
+        appar_type.APPAR_TYPE_NAME AS APPAR_MODULE_NAME,
         rp.RACK_POS_NAME,
         cr.CABINET_RACK_NAME,
         ROW_NUMBER() OVER (
@@ -158,6 +173,8 @@ IO_ASSIGN AS (
         ON (ap_id.APPAR_ID IS NULL OR ap_id.APPAR_ID = 0)
        AND cst.PANEL_ID = ap_strip.PANEL_ID
        AND cst.STRIP_ID = ap_strip.STRIP_ID
+    LEFT JOIN APPARATUS_TYPE appar_type
+        ON appar_type.APPAR_TYPE_ID = ap_id.APPAR_TYPE_ID
     LEFT JOIN RACK_POSITION rp
         ON rp.RACK_POS_ID = COALESCE(
             NULLIF(ap_id.RACK_POS_ID, 0),
@@ -253,6 +270,7 @@ AGG AS (
         MAX(TO_CHAR(from_rack.CABINET_RACK_NAME)) AS FROM_RACK,
         MAX(TO_CHAR(COALESCE(from_slot_id.RACK_POS_NAME, from_slot_seq.RACK_POS_NAME))) AS FROM_SLOT,
         MAX(TO_CHAR(from_appar.APPAR_NAME)) AS FROM_CARD,
+        MAX(TO_CHAR(from_ch.CHANNEL_NAME)) AS FROM_POS,
         MAX(
             CASE
                 WHEN TRIM(TO_CHAR(from_appar.APPAR_NAME)) IS NOT NULL AND TRIM(TO_CHAR(from_strip.STRIP_NAME)) IS NOT NULL
@@ -295,6 +313,7 @@ AGG AS (
         MAX(TO_CHAR(ioa.CABINET_RACK_NAME)) AS IO_ASSIGN_RACK,
         MAX(TO_CHAR(ioa.RACK_POS_NAME)) AS IO_ASSIGN_SLOT,
         MAX(TO_CHAR(ioa.APPAR_NAME)) AS IO_ASSIGN_CARD,
+        MAX(TO_CHAR(ioa.APPAR_MODULE_NAME)) AS IO_ASSIGN_MODULE,
         MAX(TO_CHAR(ioa.CHANNEL_NAME)) AS IO_ASSIGN_CHANNEL,
         MAX(TO_CHAR(ioa.CS_TAG_NAME)) AS CS_TAG,
 
@@ -316,6 +335,7 @@ AGG AS (
         MAX(TO_CHAR(to_rack.CABINET_RACK_NAME)) AS TO_RACK,
         MAX(TO_CHAR(COALESCE(to_slot_id.RACK_POS_NAME, to_slot_seq.RACK_POS_NAME))) AS TO_SLOT,
         MAX(TO_CHAR(to_appar.APPAR_NAME)) AS TO_CARD,
+        MAX(TO_CHAR(to_ch.CHANNEL_NAME)) AS TO_POS,
         LISTAGG(
             DISTINCT
             CASE
@@ -377,6 +397,13 @@ AGG AS (
     LEFT JOIN PANEL_STRIP from_card_strip
         ON from_appar.PANEL_ID = from_card_strip.PANEL_ID
        AND from_appar.STRIP_ID = from_card_strip.STRIP_ID
+    /* Module-level child apparatus (e.g. BAI1-1).
+       CHANNEL.PANEL_ID/STRIP_ID identifies the module strip, not the wire terminal strip.
+       The wire lands on the BAI1 parent strip, but the channel belongs to the BAI1-1 child strip. */
+    LEFT JOIN APPARATUS from_appar_module
+        ON from_appar_module.PANEL_ID = from_ch.PANEL_ID
+       AND from_appar_module.STRIP_ID = from_ch.STRIP_ID
+       AND NULLIF(from_appar_module.PARENT_ID, 0) IS NOT NULL
     LEFT JOIN CABINET_RACK from_rack
         ON COALESCE(from_appar.RACK_ID, from_card_strip.RACK_ID, from_strip.RACK_ID) = from_rack.RACK_ID
     LEFT JOIN RACK_POSITION from_slot_id
@@ -407,6 +434,11 @@ AGG AS (
     LEFT JOIN PANEL_STRIP to_card_strip
         ON to_appar.PANEL_ID = to_card_strip.PANEL_ID
        AND to_appar.STRIP_ID = to_card_strip.STRIP_ID
+    /* Module-level child apparatus (e.g. BAI1-1) — same logic as FROM side. */
+    LEFT JOIN APPARATUS to_appar_module
+        ON to_appar_module.PANEL_ID = to_ch.PANEL_ID
+       AND to_appar_module.STRIP_ID = to_ch.STRIP_ID
+       AND NULLIF(to_appar_module.PARENT_ID, 0) IS NOT NULL
     LEFT JOIN CABINET_RACK to_rack
         ON COALESCE(to_appar.RACK_ID, to_card_strip.RACK_ID, to_strip.RACK_ID) = to_rack.RACK_ID
     LEFT JOIN RACK_POSITION to_slot_id
@@ -482,6 +514,11 @@ SELECT
     END AS FROM_TERMINAL_STRIP,
     CASE
         WHEN SWAP_FLG = 1
+            THEN TO_POS
+        ELSE FROM_POS
+    END AS FROM_POS,
+    CASE
+        WHEN SWAP_FLG = 1
             THEN TO_GROUP_SEQ
         ELSE FROM_GROUP_SEQ
     END AS FROM_GROUP_SEQ,
@@ -510,6 +547,11 @@ SELECT
             THEN FROM_TERMINAL_STRIP
         ELSE TO_TERMINAL_STRIP
     END AS TO_TERMINAL_STRIP,
+    CASE
+        WHEN SWAP_FLG = 1
+            THEN FROM_POS
+        ELSE TO_POS
+    END AS TO_POS,
     CASE
         WHEN SWAP_FLG = 1
             THEN FROM_GROUP_SEQ
@@ -550,6 +592,7 @@ SELECT
             ELSE COALESCE(TO_CARD, FROM_CARD)
         END
     ) AS CARD,
+    IO_ASSIGN_MODULE AS IO_MODULE,
     COALESCE(
         IO_ASSIGN_CHANNEL,
         CASE
@@ -634,6 +677,7 @@ FROM (
     FROM AGG a
 ) x
 ORDER BY
+    UNIT_NAME,
     LOOP_NAME,
     INSTRUMENT_NAME,
     /* =========================

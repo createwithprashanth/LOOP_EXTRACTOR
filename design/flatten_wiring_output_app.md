@@ -50,7 +50,7 @@ The flattening logic relies on these fields (names as in the report output):
 - TO endpoint:
   - `TO_PANEL_TYPE`, `TO_PANEL`, `TO_TERMINAL_STRIP`, `TO_GROUP_SEQ`, `TO_TERMINALS`, `TO_COLOR_TERMINALS`
 - IO assignment / system side (optional but typically present):
-  - `RACK`, `SLOT`, `CARD`, `CHANNEL`, `CS_TAG`
+  - `RACK`, `SLOT`, `CARD`, `CARD_TYPE`, `IO_MODULE`, `CHANNEL`, `CS_TAG`
 - Drawing refs (optional but desired):
   - `PID_NUMBER`, `LOOP_DWG_NO`
 
@@ -153,6 +153,7 @@ Include a single set of “instrument-level” columns:
 - `SIGNAL_TYPE_NAME`
 - `UNIT_NAME`
 - `RACK`, `SLOT`, `CARD`, `CHANNEL`, `CS_TAG`
+- `CARD_TYPE`, `IO_MODULE`
 
 ### 5.2) Segment columns (repeated up to 10)
 
