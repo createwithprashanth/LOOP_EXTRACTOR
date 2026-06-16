@@ -195,6 +195,7 @@ def flatten_wiring_output(df: pd.DataFrame, options: FlattenOptions | None = Non
         current_node = node0
         out_step = 0
         current_seg_id: tuple[object, ...] | None = None
+        current_cable_from_node: dict[str, object] = {}
 
         for i in range(1, options.max_segments + 1):
             idx = i - 1
@@ -207,6 +208,7 @@ def flatten_wiring_output(df: pd.DataFrame, options: FlattenOptions | None = Non
 
             seg = group.iloc[idx]
             seg_id = _segment_identity(seg)
+            from_node = _node_from_row(seg, side="FROM")
             # Advance node using TO side when present; otherwise keep previous node.
             next_node = _node_from_row(seg, side="TO")
             if _node_is_empty(next_node):
@@ -229,12 +231,22 @@ def flatten_wiring_output(df: pd.DataFrame, options: FlattenOptions | None = Non
             # If this is the same cable (same identity) but terminates on a different
             # strip in the same panel (e.g., PLC FTBF04 vs ISE BAR), keep it as the
             # same hop and append strip/terminal details onto the existing node.
+            # Guard: the FROM side must also match the cable's origin panel — if the
+            # FROM panel has changed it means this is a new sequential hop (e.g., a
+            # second CROSS WIRE from HLC→AI204 after a first from FTBF07→HLC) even
+            # though both share the same synthetic CABLE_SET_ID (CROSS WIRE = 1).
+            from_matches_origin = (
+                _node_is_empty(from_node)
+                or (pd.isna(from_node.get("PANEL")) or from_node.get("PANEL") is None)
+                or _node_key(from_node) == _node_key(current_cable_from_node)
+            )
             if (
                 out_step > 0
                 and current_seg_id is not None
                 and seg_id == current_seg_id
                 and (next_node.get("PANEL") == current_node.get("PANEL"))
                 and pd.notna(next_node.get("PANEL"))
+                and from_matches_origin
             ):
                 node_idx = out_step
                 row[f"NODE{node_idx}_TERMINAL_STRIP"] = _merge_terminals(
@@ -253,6 +265,7 @@ def flatten_wiring_output(df: pd.DataFrame, options: FlattenOptions | None = Non
             for col in CABLE_COLS:
                 row[f"CABLE{out_step}_{col}"] = seg.get(col)
             current_seg_id = seg_id
+            current_cable_from_node = from_node
 
             for suffix, value in next_node.items():
                 row[f"NODE{out_step}_{suffix}"] = value
@@ -267,7 +280,6 @@ def flatten_wiring_output(df: pd.DataFrame, options: FlattenOptions | None = Non
     # Keep a predictable column order: header, flags, then node/cable chain.
     columns: list[str] = []
     columns.extend(HEADER_COLS)
-    columns.extend(["CABLE_COUNT", "HOP_COUNT", "OVERFLOW_FLG"])
     columns.extend([f"NODE0_{s}" for s in NODE_FIELD_SUFFIXES])
     chain_len = options.max_segments if options.fixed_width else max_used_steps
     for i in range(1, chain_len + 1):

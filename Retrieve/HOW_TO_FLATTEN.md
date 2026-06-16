@@ -32,7 +32,7 @@ Open a terminal in the project root:
 C:\D-Drive\Apps\Loop Extractor
 ```
 
-Run:
+### One row per instrument
 
 ```powershell
 python -m loop_extractor flatten-excel --input "Retrieve\<filename>.xlsx" --max-segments auto
@@ -50,12 +50,20 @@ Output is written next to the input file with `_flattened` appended:
 Retrieve\Wiring_retrieve_output_1661P_flattened.xlsx
 ```
 
-## Optional: Multi-Row Drawing View
+### One row per wire (loop drawing style)
 
-Use this when engineers want early terminal lists split into separate rows:
+Use this when engineers want each terminal on its own row, replicating the
+loop drawing layout. All common columns (cable, header, IO) are duplicated
+across rows for the same instrument.
 
 ```powershell
 python -m loop_extractor flatten-excel-multirows --input "Retrieve\<filename>.xlsx" --max-segments auto
+```
+
+Output is written with `_flattened_multirows` appended:
+
+```text
+Retrieve\Wiring_retrieve_output_1661P_flattened_multirows.xlsx
 ```
 
 ## Useful Options
@@ -100,10 +108,4 @@ IO assignment columns at the end:
 
 ```text
 RACK, SLOT, CARD, CARD_TYPE, TU_TYPE, IO_MODULE_TYPE, CHANNEL, CS_TAG
-```
-
-Control columns:
-
-```text
-CABLE_COUNT, HOP_COUNT, OVERFLOW_FLG
 ```

@@ -262,11 +262,8 @@ def cmd_flatten_excel_multirows(args: argparse.Namespace) -> int:
     key = ("LOOP_NAME", "INSTRUMENT_NAME") if args.key == "loop+instrument" else ("INSTRUMENT_NAME",)
     max_segments = _resolve_max_segments(df, key=key, value=args.max_segments, margin=args.auto_segments_margin)
     out_df = flatten_wiring_output(df, FlattenOptions(key=key, max_segments=max_segments, fixed_width=args.fixed_width))
-    # Multi-row view: split terminal lists so drawings are easier to read.
-    # Multi-row view: split early termination nodes (+/- at instrument, JB/PLC terminals).
-    # Keep later nodes (e.g., CROSS WIRE mapping) as merged cells to avoid extra rows.
-    out_df = _explode_all_nodes_by_index(out_df, max_node=2)
-    out_df = _collapse_late_node_strips(out_df, after_node=2)
+    # Expand all nodes by terminal index: one row per wire, common cells duplicated.
+    out_df = _explode_all_nodes_by_index(out_df, max_node=None)
 
     output_path = (
         Path(args.output)
